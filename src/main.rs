@@ -1,12 +1,12 @@
-use std::net::{TcpListener, TcpStream};
-use std::io::{Read, Write, Error};
-use std::sync::{Arc, Mutex};
-
 use clap::{App, Arg};
 use colored::*;
-use log::{info, warn, error, trace, Level, LevelFilter, Metadata, Record};
+use log::{warn, error, trace, Level, LevelFilter, Metadata, Record};
 
 mod constants;
+mod io;
+
+use crate::io::tcp::tcp_forward;
+
 
 struct SocatRsLogger;
 
@@ -41,7 +41,7 @@ impl log::Log for SocatRsLogger
 static LOGGER: SocatRsLogger = SocatRsLogger;
 
 
-struct ThreadParameters
+pub struct ThreadParameters
 {
     target: String
 }
@@ -58,65 +58,6 @@ impl ThreadParameters
     }
 }
 
-
-
-fn handle_tcp_client(mut to_client_stream: TcpStream, args: Arc<Mutex<ThreadParameters>>) -> Result<(), Error>
-{
-    trace!("handling connection from {}", to_client_stream.peer_addr()?);
-
-
-    let dst = &args.lock().unwrap().target;
-    let mut to_server_stream = TcpStream::connect(dst).expect("failed to connect to server");
-
-    // not async at all, todo
-    loop
-    {
-        let mut buf = [0; 2048];
-        // cli -> srv
-        let request_nb_bytes = to_client_stream.read(&mut buf)?;
-        to_server_stream.write(&buf[..request_nb_bytes])?;
-
-        // srv -> cli
-        let response_nb_bytes = to_server_stream.read(&mut buf)?;
-        to_client_stream.write(&buf[..response_nb_bytes])?;
-    }
-}
-
-
-fn tcp_forward(source: String, destination: String) -> Result<(), Error>
-{
-    let srv = TcpListener::bind(source)
-        .expect("failed to bind port");
-
-    let params = ThreadParameters::new(destination);
-    let rc = Arc::new(Mutex::new(params));
-
-    for conn in srv.incoming()
-    {
-        match conn
-        {
-            Err(e) =>
-            {
-                println!("connection failed, reason: {}", e)
-            }
-
-            Ok(conn) =>
-            {
-                let local_rc = Arc::clone(&rc);
-
-                let t = std::thread::spawn(move ||
-                {
-                    handle_tcp_client(conn, local_rc)
-                        .unwrap_or_else(|err| eprintln!("{:?}", err))
-                });
-
-                t.join().unwrap();
-            }
-        }
-    }
-
-    Ok(())
-}
 
 
 fn main()
@@ -187,7 +128,8 @@ fn main()
 
 
 
-    match matches.subcommand_name() {
+    match matches.subcommand_name()
+    {
         Some("tcp") =>
         {
             trace!("tcp_forwarding");
